@@ -1,4 +1,7 @@
 node_modules
 .env
-bot_stats.db
-*.log
+*.db
+*.db-journal
+*.db-wal
+npm-debug.log
+.DS_Store
