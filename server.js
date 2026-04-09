@@ -1,7 +1,7 @@
 /**
- * Telegram Mass Inviter Bot - Production Fix v3 (Anti-Ban Integrated)
+ * Telegram Mass Inviter Bot - Production Fix v4 (AI Intelligence Integrated)
  * Optimized for Render (Free Tier) with Webhook/Polling Auto-Switch
- * Anti-Ban, Rate Limiting, and Sequential Queue Included.
+ * AI Risk Engine, Behavior Controller, and Account Rotation System.
  */
 
 require('dotenv').config();
@@ -14,10 +14,13 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 
-// --- Custom Anti-Ban & Queue Services ---
-const AntiBanSystem = require('./utils/antiban');
+// --- AI & Custom Services ---
+const RiskEngine = require('./ai/riskEngine');
+const BehaviorController = require('./ai/behaviorController');
+const AccountManager = require('./services/accountManager');
+const Randomizer = require('./utils/randomizer');
 const queue = require('./services/queue');
-const { randomDelay, sleep } = require('./utils/delay');
+const { sleep } = require('./utils/delay');
 
 // --- Global Configuration ---
 const PORT = process.env.PORT || 3000;
@@ -41,11 +44,10 @@ db.prepare(`CREATE TABLE IF NOT EXISTS members (username TEXT UNIQUE, status TEX
 const requiredStats = ['success', 'failed', 'scraped', 'hourly_count', 'daily_count'];
 requiredStats.forEach(k => db.prepare('INSERT OR IGNORE INTO stats (key, value) VALUES (?, 0)').run(k));
 
-const antiBan = new AntiBanSystem(db);
-
-// Reset counters periodically
-setInterval(() => antiBan.resetCounters('hourly'), 3600000); // Every hour
-setInterval(() => antiBan.resetCounters('daily'), 86400000); // Every 24 hours
+// --- AI Engine Initialization ---
+const riskEngine = new RiskEngine(db);
+const behavior = new BehaviorController(riskEngine);
+const accounts = new AccountManager(riskEngine);
 
 // --- Express App Setup ---
 const app = express();
@@ -70,37 +72,67 @@ if (process.env.NODE_ENV === 'production' && APP_URL) {
   bot.on('polling_error', (err) => console.error(`❌ Polling error:`, err.code));
 }
 
-// --- Anti-Ban Protected Actions ---
+// --- Intelligent Protected Actions ---
 
 /**
- * Safe Invitation Wrapper
+ * Intelligent Safe Invitation
  */
-async function safeInvite(chatId, memberUsername) {
-  const check = await antiBan.checkLimits();
-  if (!check.allowed) {
-    bot.sendMessage(chatId, `⚠️ [ANTIBAN] Paused. Reason: ${check.reason}. Wait: ${check.waitTime}s.`);
+async function intelligentInvite(chatId, memberUsername) {
+  // 1. Get best account based on risk score
+  const bestAccount = await accounts.getBestAccount();
+  if (!bestAccount) {
+    bot.sendMessage(chatId, `🚨 [AI] All accounts are in CRITICAL risk state. Pausing all activity for 1 hour.`);
     return;
   }
 
+  // 2. Check risk and calculate delay
+  const { score, level } = await riskEngine.calculateRisk(bestAccount.id);
+  const delay = await behavior.getNextActionDelay(bestAccount.id);
+
+  console.log(`[AI] Using account: ${bestAccount.id} | Risk: ${score} (${level}) | Delay: ${Math.round(delay/1000)}s`);
+
+  // 3. Human-like Schedule & Breaks
+  const nightCheck = await behavior.simulateHumanSchedule();
+  if (nightCheck.sleep) {
+    bot.sendMessage(chatId, `🌙 [AI] Night mode activated. Sleeping for 1 hour...`);
+    await sleep(nightCheck.duration);
+    return;
+  }
+
+  const breakCheck = await behavior.shouldTakeBreak();
+  if (breakCheck.takeBreak) {
+    bot.sendMessage(chatId, `☕ [AI] Taking a human-like break for ${Math.round(breakCheck.duration / 60000)} mins.`);
+    await sleep(breakCheck.duration);
+  }
+
+  // 4. Action Processing with Dynamic Delay
   try {
-    // Human-like randomization before action
-    await randomDelay(5000, 15000);
+    await sleep(delay); // AI calculated delay
     
-    // Simulate real invitation (Logic to be replaced with actual Telegram API call if using TDLib/MTProto)
-    // For node-telegram-bot-api, we simulate the success/fail pattern safely.
-    console.log(`[ACTION] Inviting ${memberUsername}...`);
+    // Simulate real invitation (Placeholder for actual API call)
+    console.log(`[AI-ACTION] Inviting ${memberUsername}...`);
     
-    // Simulate a success for now (Since node-telegram-bot-api doesn't have native addChatMember for users not in contacts)
-    await antiBan.recordSuccess();
-    console.log(`✅ [ACTION] Success: ${memberUsername}`);
+    // Record Success
+    db.prepare("UPDATE stats SET value = value + 1 WHERE key = 'success'").run();
+    db.prepare("UPDATE stats SET value = value + 1 WHERE key = 'hourly_count'").run();
+    db.prepare("UPDATE stats SET value = value + 1 WHERE key = 'daily_count'").run();
+    
+    console.log(`✅ [AI-ACTION] Success: ${memberUsername}`);
 
   } catch (error) {
-    const handle = await antiBan.handleFlood(error);
-    if (handle.action === 'pause') {
-      bot.sendMessage(chatId, `🚫 [FLOOD] Pausing for ${handle.waitTime}s due to Telegram limits.`);
+    const errorMsg = error.message || '';
+    if (errorMsg.includes('FLOOD_WAIT_')) {
+      await riskEngine.recordEvent(bestAccount.id, 'FLOOD_WAIT');
+      const seconds = parseInt(errorMsg.split('FLOOD_WAIT_')[1]) || 300;
+      bot.sendMessage(chatId, `🚫 [AI-FLOOD] Account ${bestAccount.id} restricted for ${seconds}s. Adapting...`);
+      await sleep((seconds + 30) * 1000);
+    } else if (errorMsg.includes('PEER_FLOOD')) {
+      await riskEngine.recordEvent(bestAccount.id, 'PEER_FLOOD');
+      bot.sendMessage(chatId, `🚨 [AI-FLOOD] Account ${bestAccount.id} marked as high risk. Switching...`);
     }
-    await antiBan.recordFailure();
-    console.log(`❌ [ACTION] Failed: ${memberUsername} - ${error.message}`);
+    
+    db.prepare("UPDATE stats SET value = value + 1 WHERE key = 'failed'").run();
+    console.log(`❌ [AI-ACTION] Failed: ${memberUsername} - ${error.message}`);
   }
 }
 
@@ -108,22 +140,27 @@ async function safeInvite(chatId, memberUsername) {
 
 bot.onText(/\/start/, (msg) => {
   if (ADMIN_ID !== 0 && msg.from.id !== ADMIN_ID) return;
-  bot.sendMessage(msg.chat.id, `🚀 *Anti-Ban System ACTIVE*\n\nStatus: Safe Mode\nRate Limits: ${antiBan.limits.hourly}/hr, ${antiBan.limits.daily}/day\nQueue: ${queue.getQueueStatus().count} pending.`, { parse_mode: 'Markdown' });
+  const status = `🚀 *AI Anti-Ban System ACTIVE*\n\n` +
+                 `🧠 *Risk Engine:* Active\n` +
+                 `📊 *Risk Level:* ${riskEngine.getRiskStatus('primary').level}\n` +
+                 `👥 *Queue:* ${queue.getQueueStatus().count} pending.\n\n` +
+                 `Mode: ${APP_URL ? 'Webhook' : 'Polling'}`;
+  bot.sendMessage(msg.chat.id, status, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/invite/, (msg) => {
   if (ADMIN_ID !== 0 && msg.from.id !== ADMIN_ID) return;
   
-  const members = db.prepare('SELECT username FROM members LIMIT 20').all();
+  const members = db.prepare('SELECT username FROM members LIMIT 50').all();
   if (members.length === 0) return bot.sendMessage(msg.chat.id, '❌ No members in queue. Use /scrape first.');
 
-  bot.sendMessage(msg.chat.id, `🚀 Starting safe invitation batch (${members.length} users)...`);
+  bot.sendMessage(msg.chat.id, `🚀 [AI] Starting intelligent invitation batch (${members.length} users)...`);
   
-  // Shuffle members to avoid sequential pattern
-  const shuffled = members.sort(() => 0.5 - Math.random());
+  // Shuffle users to mimic human non-sequential pattern
+  const shuffled = Randomizer.shuffle(members);
 
   shuffled.forEach((m) => {
-    queue.add(() => safeInvite(msg.chat.id, m.username));
+    queue.add(() => intelligentInvite(msg.chat.id, m.username));
   });
 
   db.prepare('DELETE FROM members WHERE username IN (' + members.map(() => '?').join(',') + ')').run(...members.map(m => m.username));
@@ -132,21 +169,23 @@ bot.onText(/\/invite/, (msg) => {
 bot.onText(/\/stats/, (msg) => {
   if (ADMIN_ID !== 0 && msg.from.id !== ADMIN_ID) return;
   const stats = db.prepare('SELECT key, value FROM stats').all().reduce((a, r) => ({ ...a, [r.key]: r.value }), {});
-  const queueStatus = queue.getQueueStatus();
+  const currentRisk = riskEngine.getRiskStatus('primary');
   
-  const text = `📊 *Anti-Ban Stats:*\n✅ Success: ${stats.success}\n❌ Failed: ${stats.failed}\n🕒 Hourly Usage: ${stats.hourly_count}/${antiBan.limits.hourly}\n📅 Daily Usage: ${stats.daily_count}/${antiBan.limits.daily}\n⏳ Queue: ${queueStatus.count} pending.`;
+  const text = `📊 *AI Activity Metrics:*\n` +
+               `✅ Success: ${stats.success}\n` +
+               `❌ Failed: ${stats.failed}\n` +
+               `⚠️ Risk Score: ${currentRisk.score}/100\n` +
+               `🛡️ Risk Level: ${currentRisk.level}\n` +
+               `🕒 Hourly Usage: ${stats.hourly_count}/30\n` +
+               `📅 Daily Usage: ${stats.daily_count}/120`;
   bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
 });
 
 // --- Dashboard & Health ---
-app.get('/', (req, res) => res.send('🤖 Anti-Ban System Running.'));
+app.get('/', (req, res) => res.send('🤖 AI Risk Engine is Online.'));
 app.get('/health', (req, res) => res.status(200).send('OK'));
-
-// --- Error Handling ---
-process.on('uncaughtException', (err) => console.error('🔥 CRITICAL:', err.message));
-process.on('unhandledRejection', (reason) => console.error('🔥 REJECTION:', reason));
 
 // --- Start Server ---
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 [SERVER] Anti-Ban Protection Active on port ${PORT}`);
+  console.log(`🚀 [SERVER] AI Intelligent Anti-Ban Active on port ${PORT}`);
 });
