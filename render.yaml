@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: telegram-mass-inviter-v1
+    name: telegram-mass-inviter
     env: node
     plan: free
     buildCommand: npm install
@@ -10,8 +10,8 @@ services:
         sync: false
       - key: ADMIN_ID
         sync: false
-      - key: WEBHOOK_URL
-        sync: false
+      - key: NODE_ENV
+        value: production
       - key: NODE_VERSION
         value: 18.16.0
     disk:
